@@ -1,110 +1,92 @@
 const express = require("express");
-const path = require("path");
-const session = require("express-session");
-const passport = require("passport");
-const bcrypt = require("bcryptjs");
-const LocalStrategy = require("passport-local").Strategy;
 const mongoose = require("mongoose");
-const Schema = mongoose.Schema;
+const session = require("express-session");
+// Package documentation - https://www.npmjs.com/package/connect-mongo
+const MongoStore = require("connect-mongo");
 
-const mongoDb =
-  "mongodb+srv://admin:test@authentication.cvouixf.mongodb.net/?retryWrites=true&w=majority";
-mongoose.connect(mongoDb, { useUnifiedTopology: true, useNewUrlParser: true });
-const db = mongoose.connection;
-db.on("error", console.error.bind(console, "mongo connection error"));
-
-const User = mongoose.model(
-  "User",
-  new Schema({
-    username: { type: String, required: true },
-    password: { type: String, required: true },
-  })
-);
-
-const app = express();
+/**
+ * -------------- GENERAL SETUP ----------------
+ */
+// Gives us access to variables set in the .env file via `process.env.VARIABLE_NAME` syntax
+require("dotenv").config();
+// Create the Express application
+var app = express();
 app.set("views", __dirname);
 app.set("view engine", "ejs");
 
-app.use(session({ secret: "cats", resave: false, saveUninitialized: true }));
+// Middleware that allows Express to parse through both JSON and x-www-form-urlencoded request bodies
+// These are the same as `bodyParser` - you probably would see bodyParser put here in most apps
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
-passport.use(
-  new LocalStrategy((username, password, done) => {
-    User.findOne({ username: username }).then((user, err) => {
-      if (err) {
-        return done(err);
-      }
-      if (!user) {
-        return done(null, false, { message: "Incorrect username" });
-      }
-      bcrypt.compare(password, user.password, (err, res) => {
-        if (res) {
-          return done(null, user);
-        } else {
-          return done(null, false, { message: "Incorrect password" });
-        }
-      });
-    });
+/**
+ * -------------- DATABASE ----------------
+ */
+/**
+ * Connect to MongoDB Server using the connection string in the `.env` file.  To implement this, place the following
+ * string into the `.env` file
+ *
+ * DB_STRING=mongodb://<user>:<password>@localhost:27017/database_name
+ */
+const connection = mongoose.createConnection(process.env.MONGO_URI);
+// Creates simple schema for a User.  The hash and salt are derived from the user's given password when they register
+const UserSchema = new mongoose.Schema({
+  username: String,
+  hash: String,
+  salt: String,
+});
+// Defines the model that we will use in the app
+mongoose.model("User", UserSchema);
+
+/**
+ * -------------- SESSION SETUP ----------------
+ */
+/**
+ * The MongoStore is used to store session data.  We will learn more about this in the post.
+ *
+ * Note that the `connection` used for the MongoStore is the same connection that we are using above
+ */;
+let sessionStore = MongoStore.create({ mongoUrl: process.env.MONGO_URI });
+
+
+/**
+ * See the documentation for all possible options - https://www.npmjs.com/package/express-session
+ *
+ * As a brief overview (we will add more later):
+ *
+ * secret: This is a random string that will be used to "authenticate" the session.  In a production environment,
+ * you would want to set this to a long, randomly generated string
+ *
+ * resave: when set to true, this will force the session to save even if nothing changed.  If you don't set this,
+ * the app will still run but you will get a warning in the terminal
+ *
+ * saveUninitialized: Similar to resave, when set true, this forces the session to be saved even if it is unitialized
+ */
+app.use(
+  session({
+    secret: process.env.SECRET,
+    resave: false,
+    saveUninitialized: true,
+    store: sessionStore,
   })
 );
 
-passport.serializeUser(function (user, cb) {
-  process.nextTick(function () {
-    cb(null, { id: user.id, username: user.username });
-  });
+/**
+ * -------------- ROUTES ----------------
+ */
+// When you visit http://localhost:3000/login, you will see "Login Page"
+app.get("/", (req, res, next) => {
+  res.render("index");
 });
-
-passport.deserializeUser(function (user, cb) {
-  process.nextTick(function () {
-    return cb(null, user);
-  });
+app.post("/login", (req, res, next) => {});
+// When you visit http://localhost:3000/register, you will see "Register Page"
+app.get("/register", (req, res, next) => {
+  res.render("sign-up-form");
 });
+app.post("/register", (req, res, next) => {});
 
-app.use(passport.initialize());
-app.use(passport.session());
-app.use(express.urlencoded({ extended: false }));
-
-app.use(function (req, res, next) {
-  res.locals.currentUser = req.user;
-  next();
-});
-
-app.get("/", (req, res) => {
-  res.render("index", { user: req.user });
-});
-
-app.get("/sign-up", (req, res) => res.render("sign-up-form"));
-
-app.post("/sign-up", (req, res, next) => {
-  bcrypt.hash(req.body.password, 10, (err, hashedPassword) => {
-    const user = new User({
-      username: req.body.username,
-      password: hashedPassword,
-    })
-      .save()
-      .then(() => {
-        res.redirect("/");
-      })
-      .catch((err) => {
-        return next(err);
-      });
-  });
-});
-
-app.post(
-  "/log-in",
-  passport.authenticate("local", {
-    successRedirect: "/",
-    failureRedirect: "/",
-  })
-);
-
-app.get("/log-out", (req, res, next) => {
-  req.logout(function (err) {
-    if (err) {
-      return next(err);
-    }
-    res.redirect("/");
-  });
-});
-
-app.listen(3000, () => console.log("app listening on port 3000"));
+/**
+ * -------------- SERVER ----------------
+ */
+// Server listens on http://localhost:3000
+app.listen(3000);
