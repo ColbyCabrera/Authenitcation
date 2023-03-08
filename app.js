@@ -3,6 +3,9 @@ const mongoose = require("mongoose");
 const session = require("express-session");
 // Package documentation - https://www.npmjs.com/package/connect-mongo
 const MongoStore = require("connect-mongo");
+const passport = require("passport");
+const LocalStrategy = require("passport-local").Strategy;
+let crypto = require("crypto");
 
 /**
  * -------------- GENERAL SETUP ----------------
@@ -19,16 +22,10 @@ app.set("view engine", "ejs");
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-/**
- * -------------- DATABASE ----------------
- */
-/**
- * Connect to MongoDB Server using the connection string in the `.env` file.  To implement this, place the following
- * string into the `.env` file
- *
- * DB_STRING=mongodb://<user>:<password>@localhost:27017/database_name
- */
-const connection = mongoose.createConnection(process.env.MONGO_URI);
+const connection = mongoose.createConnection(process.env.MONGO_URI, {
+  useNewUrlParser: true,
+  useUnifiedTopology: true,
+});
 // Creates simple schema for a User.  The hash and salt are derived from the user's given password when they register
 const UserSchema = new mongoose.Schema({
   username: String,
@@ -36,57 +33,130 @@ const UserSchema = new mongoose.Schema({
   salt: String,
 });
 // Defines the model that we will use in the app
-mongoose.model("User", UserSchema);
-
-/**
- * -------------- SESSION SETUP ----------------
- */
-/**
- * The MongoStore is used to store session data.  We will learn more about this in the post.
- *
- * Note that the `connection` used for the MongoStore is the same connection that we are using above
- */;
+const User = connection.model("User", UserSchema);
 let sessionStore = MongoStore.create({ mongoUrl: process.env.MONGO_URI });
 
-
-/**
- * See the documentation for all possible options - https://www.npmjs.com/package/express-session
- *
- * As a brief overview (we will add more later):
- *
- * secret: This is a random string that will be used to "authenticate" the session.  In a production environment,
- * you would want to set this to a long, randomly generated string
- *
- * resave: when set to true, this will force the session to save even if nothing changed.  If you don't set this,
- * the app will still run but you will get a warning in the terminal
- *
- * saveUninitialized: Similar to resave, when set true, this forces the session to be saved even if it is unitialized
- */
 app.use(
   session({
     secret: process.env.SECRET,
     resave: false,
     saveUninitialized: true,
     store: sessionStore,
+    cookie: {
+      maxAge: 1000 * 30,
+    },
   })
 );
 
-/**
- * -------------- ROUTES ----------------
- */
-// When you visit http://localhost:3000/login, you will see "Login Page"
-app.get("/", (req, res, next) => {
-  res.render("index");
+function validPassword(password, hash, salt) {
+  const hashVerify = crypto
+    .pbkdf2Sync(password, salt, 10000, 64, "sha512")
+    .toString("hex");
+  return hash === hashVerify;
+}
+
+function genPassword(password) {
+  const salt = crypto.randomBytes(32).toString("hex");
+  const genHash = crypto
+    .pbkdf2Sync(password, salt, 10000, 64, "sha512")
+    .toString("hex");
+
+  return {
+    salt: salt,
+    hash: genHash,
+  };
+}
+
+passport.use(
+  new LocalStrategy(function (username, password, cb) {
+    User.findOne({ username: username })
+      .then((user) => {
+        if (!user) {
+          return cb(null, false);
+        }
+
+        // Function defined at bottom of app.js
+        const isValid = validPassword(password, user.hash, user.salt);
+
+        if (isValid) {
+          return cb(null, user);
+        } else {
+          return cb(null, false);
+        }
+      })
+      .catch((err) => {
+        cb(err);
+      });
+  })
+);
+
+passport.serializeUser(function (user, cb) {
+  cb(null, user.id);
 });
-app.post("/login", (req, res, next) => {});
-// When you visit http://localhost:3000/register, you will see "Register Page"
+
+passport.deserializeUser(function (id, cb) {
+  User.findById(id)
+    .then((user) => {
+      cb(null, user);
+    })
+    .catch((err) => {
+      if (err) {
+        cb(err);
+      }
+    });
+});
+
+app.use(passport.initialize());
+app.use(passport.session());
+
+app.get("/", (req, res, next) => {
+  res.render("index", { user: req.user });
+});
+
+app.post(
+  "/log-in",
+  passport.authenticate("local", {
+    successRedirect: "/",
+    failureRedirect: "/",
+  })
+);
+
+app.get("/log-out", (req, res, next) => {
+  req.logout(function (err) {
+    if (err) {
+      return next(err);
+    }
+    res.redirect("/");
+  });
+});
+
 app.get("/register", (req, res, next) => {
   res.render("sign-up-form");
 });
-app.post("/register", (req, res, next) => {});
 
-/**
- * -------------- SERVER ----------------
- */
-// Server listens on http://localhost:3000
+app.post("/register", (req, res, next) => {
+  const saltHash = genPassword(req.body.password);
+
+  const salt = saltHash.salt;
+  const hash = saltHash.hash;
+  const newUser = new User({
+    username: req.body.username,
+    hash: hash,
+    salt: salt,
+  });
+  newUser.save().then((user) => {
+    console.log(user);
+  });
+  res.redirect("/");
+});
+
+app.get("/protected-route", (req, res, next) => {
+  console.log(req.session);
+  if (req.isAuthenticated()) {
+    res.send("<h1>You are authenticated</h1>");
+  } else {
+    res.send("<h1>You are not authenticated</h1>");
+  }
+});
+
 app.listen(3000);
