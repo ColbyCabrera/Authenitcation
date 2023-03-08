@@ -5,6 +5,7 @@ const session = require("express-session");
 const MongoStore = require("connect-mongo");
 const passport = require("passport");
 const LocalStrategy = require("passport-local").Strategy;
+const bcrypt = require("bcryptjs");
 let crypto = require("crypto");
 
 /**
@@ -28,9 +29,8 @@ const connection = mongoose.createConnection(process.env.MONGO_URI, {
 });
 // Creates simple schema for a User.  The hash and salt are derived from the user's given password when they register
 const UserSchema = new mongoose.Schema({
-  username: String,
-  hash: String,
-  salt: String,
+  username: { type: String, required: true },
+  password: { type: String, required: true },
 });
 // Defines the model that we will use in the app
 const User = connection.model("User", UserSchema);
@@ -75,13 +75,12 @@ passport.use(
           return cb(null, false);
         }
 
-        // Function defined at bottom of app.js
-        const isValid = validPassword(password, user.hash, user.salt);
+        const isValid = bcrypt.compare(password, user.password);
 
         if (isValid) {
           return cb(null, user);
         } else {
-          return cb(null, false);
+          return cb(null, false, { message: "Incorrect password" });
         }
       })
       .catch((err) => {
@@ -135,19 +134,21 @@ app.get("/register", (req, res, next) => {
 });
 
 app.post("/register", (req, res, next) => {
-  const saltHash = genPassword(req.body.password);
+  bcrypt.hash("somePassword", 10, (err, hashedPassword) => {
+    if (err) {
+      return next(err);
+    }
 
-  const salt = saltHash.salt;
-  const hash = saltHash.hash;
-  const newUser = new User({
-    username: req.body.username,
-    hash: hash,
-    salt: salt,
+    const newUser = new User({
+      username: req.body.username,
+      password: hashedPassword,
+    });
+
+    newUser.save().then((user) => {
+      console.log(user);
+    });
+    res.redirect("/");
   });
-  newUser.save().then((user) => {
-    console.log(user);
-  });
-  res.redirect("/");
 });
 
 app.get("/protected-route", (req, res, next) => {
